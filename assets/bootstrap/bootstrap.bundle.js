@@ -34,6 +34,14 @@
 	 * --------------------------------------------------------------------------
 	 */
 
+	const getUID = (prefix) => {
+		do {
+			prefix += Math.floor(Math.random() * MAX_UID);
+		} while (document.getElementById(prefix));
+
+		return prefix;
+	};
+
 	const getSelector = (element) => {
 		let selector = element.getAttribute('data-bs-target');
 
@@ -55,6 +63,16 @@
 		}
 
 		return selector;
+	};
+
+	const getSelectorFromElement = (element) => {
+		const selector = getSelector(element);
+
+		if (selector) {
+			return document.querySelector(selector) ? selector : null;
+		}
+
+		return null;
 	};
 
 	const getElementFromSelector = (element) => {
@@ -127,6 +145,43 @@
 		}
 
 		return getComputedStyle(element).getPropertyValue('visibility') === 'visible';
+	};
+
+	const isDisabled = (element) => {
+		if (!element || element.nodeType !== Node.ELEMENT_NODE) {
+			return true;
+		}
+
+		if (element.classList.contains('disabled')) {
+			return true;
+		}
+
+		if (typeof element.disabled !== 'undefined') {
+			return element.disabled;
+		}
+
+		return element.hasAttribute('disabled') && element.getAttribute('disabled') !== 'false';
+	};
+
+	const findShadowRoot = (element) => {
+		if (!document.documentElement.attachShadow) {
+			return null;
+		} // Can find the shadow root otherwise it'll return the document
+
+		if (typeof element.getRootNode === 'function') {
+			const root = element.getRootNode();
+			return root instanceof ShadowRoot ? root : null;
+		}
+
+		if (element instanceof ShadowRoot) {
+			return element;
+		} // when we don't find a shadow root
+
+		if (!element.parentNode) {
+			return null;
+		}
+
+		return findShadowRoot(element.parentNode);
 	};
 
 	const noop = () => {};
