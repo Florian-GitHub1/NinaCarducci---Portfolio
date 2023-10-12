@@ -448,6 +448,27 @@
 		element.addEventListener(typeEvent, fn, delegation);
 	}
 
+	function removeHandler(element, events, typeEvent, handler, delegationSelector) {
+		const fn = findHandler(events[typeEvent], handler, delegationSelector);
+
+		if (!fn) {
+			return;
+		}
+
+		element.removeEventListener(typeEvent, fn, Boolean(delegationSelector));
+		delete events[typeEvent][fn.uidEvent];
+	}
+
+	function removeNamespacedHandlers(element, events, typeEvent, namespace) {
+		const storeElementEvent = events[typeEvent] || {};
+		Object.keys(storeElementEvent).forEach((handlerKey) => {
+			if (handlerKey.includes(namespace)) {
+				const event = storeElementEvent[handlerKey];
+				removeHandler(element, events, typeEvent, event.originalHandler, event.delegationSelector);
+			}
+		});
+	}
+
 	function getTypeEvent(event) {
 		// allow to get the native events from namespaced events ('click.bs.button' --> 'click')
 		event = event.replace(stripNameRegex, '');
@@ -457,6 +478,47 @@
 	const EventHandler = {
 		on(element, event, handler, delegationFn) {
 			addHandler(element, event, handler, delegationFn, false);
+		},
+
+		one(element, event, handler, delegationFn) {
+			addHandler(element, event, handler, delegationFn, true);
+		},
+
+		off(element, originalTypeEvent, handler, delegationFn) {
+			if (typeof originalTypeEvent !== 'string' || !element) {
+				return;
+			}
+
+			const [delegation, originalHandler, typeEvent] = normalizeParams(originalTypeEvent, handler, delegationFn);
+			const inNamespace = typeEvent !== originalTypeEvent;
+			const events = getEvent(element);
+			const isNamespace = originalTypeEvent.startsWith('.');
+
+			if (typeof originalHandler !== 'undefined') {
+				// Simplest case: handler is passed, remove that listener ONLY.
+				if (!events || !events[typeEvent]) {
+					return;
+				}
+
+				removeHandler(element, events, typeEvent, originalHandler, delegation ? handler : null);
+				return;
+			}
+
+			if (isNamespace) {
+				Object.keys(events).forEach((elementEvent) => {
+					removeNamespacedHandlers(element, events, elementEvent, originalTypeEvent.slice(1));
+				});
+			}
+
+			const storeElementEvent = events[typeEvent] || {};
+			Object.keys(storeElementEvent).forEach((keyHandlers) => {
+				const handlerKey = keyHandlers.replace(stripUidRegex, '');
+
+				if (!inNamespace || originalTypeEvent.includes(handlerKey)) {
+					const event = storeElementEvent[keyHandlers];
+					removeHandler(element, events, typeEvent, event.originalHandler, event.delegationSelector);
+				}
+			});
 		},
 
 		trigger(element, event, args) {
@@ -556,6 +618,19 @@
 
 			return null;
 		},
+
+		remove(element, key) {
+			if (!elementMap.has(element)) {
+				return;
+			}
+
+			const instanceMap = elementMap.get(element);
+			instanceMap.delete(key); // free up element references if there are no instances left for an element
+
+			if (instanceMap.size === 0) {
+				elementMap.delete(element);
+			}
+		},
 	};
 
 	/**
@@ -582,6 +657,14 @@
 
 			this._element = element;
 			Data.set(this._element, this.constructor.DATA_KEY, this);
+		}
+
+		dispose() {
+			Data.remove(this._element, this.constructor.DATA_KEY);
+			EventHandler.off(this._element, this.constructor.EVENT_KEY);
+			Object.getOwnPropertyNames(this).forEach((propertyName) => {
+				this[propertyName] = null;
+			});
 		}
 
 		_queueCallback(callback, element, isAnimated = true) {
@@ -670,6 +753,27 @@
 		static get NAME() {
 			return NAME$d;
 		} // Public
+
+		close() {
+			const closeEvent = EventHandler.trigger(this._element, EVENT_CLOSE);
+
+			if (closeEvent.defaultPrevented) {
+				return;
+			}
+
+			this._element.classList.remove(CLASS_NAME_SHOW$8);
+
+			const isAnimated = this._element.classList.contains(CLASS_NAME_FADE$5);
+
+			this._queueCallback(() => this._destroyElement(), this._element, isAnimated);
+		} // Private
+
+		_destroyElement() {
+			this._element.remove();
+
+			EventHandler.trigger(this._element, EVENT_CLOSED);
+			this.dispose();
+		} // Static
 
 		static jQueryInterface(config) {
 			return this.each(function () {
@@ -824,6 +928,25 @@
 				});
 			return attributes;
 		},
+
+		getDataAttribute(element, key) {
+			return normalizeData(element.getAttribute(`data-bs-${normalizeDataKey(key)}`));
+		},
+
+		offset(element) {
+			const rect = element.getBoundingClientRect();
+			return {
+				top: rect.top + window.pageYOffset,
+				left: rect.left + window.pageXOffset,
+			};
+		},
+
+		position(element) {
+			return {
+				top: element.offsetTop,
+				left: element.offsetLeft,
+			};
+		},
 	};
 
 	/**
@@ -840,6 +963,58 @@
 
 		findOne(selector, element = document.documentElement) {
 			return Element.prototype.querySelector.call(element, selector);
+		},
+
+		children(element, selector) {
+			return [].concat(...element.children).filter((child) => child.matches(selector));
+		},
+
+		parents(element, selector) {
+			const parents = [];
+			let ancestor = element.parentNode;
+
+			while (ancestor && ancestor.nodeType === Node.ELEMENT_NODE && ancestor.nodeType !== NODE_TEXT) {
+				if (ancestor.matches(selector)) {
+					parents.push(ancestor);
+				}
+
+				ancestor = ancestor.parentNode;
+			}
+
+			return parents;
+		},
+
+		prev(element, selector) {
+			let previous = element.previousElementSibling;
+
+			while (previous) {
+				if (previous.matches(selector)) {
+					return [previous];
+				}
+
+				previous = previous.previousElementSibling;
+			}
+
+			return [];
+		},
+
+		next(element, selector) {
+			let next = element.nextElementSibling;
+
+			while (next) {
+				if (next.matches(selector)) {
+					return [next];
+				}
+
+				next = next.nextElementSibling;
+			}
+
+			return [];
+		},
+
+		focusableChildren(element) {
+			const focusables = ['a', 'button', 'input', 'textarea', 'select', 'details', '[tabindex]', '[contenteditable="true"]'].map((selector) => `${selector}:not([tabindex^="-"])`).join(', ');
+			return this.find(focusables, element).filter((el) => !isDisabled(el) && isVisible(el));
 		},
 	};
 
